@@ -1,0 +1,22 @@
+*.jpg
+*.mp4
+*.zip
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Ultralytics/YOLO
+runs/
+datasets/
+
+# Models
+*.pt
+*.pth
+*.onnx
+
+# User data
+my_data*/
+
+# System
+.DS_Store
