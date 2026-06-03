@@ -2,7 +2,7 @@ from ultralytics import YOLO
 
 # 1. 加载模型 (首次运行会自动下载权重文件)
 # 'n' 代表 nano (最快)，也可以换成 's', 'm', 'l', 'x' (精度更高但更慢)
-model = YOLO('yolo11x.pt') 
+model = YOLO('weights/yolo11x.pt') 
 
 # 2. 进行预测
 # source=0 代表摄像头，也可以是 'image.jpg' 或 'video.mp4'

@@ -115,3 +115,121 @@ yolo conda 环境已安装：
 - [ ] 实际拍摄测试
 - [ ] 网格质量评估
 - [ ] BlenderProc 渲染 + YOLO 训练
+
+---
+
+# YOLO-World 零样本检测 + 微调方案
+
+## 方案背景
+
+YOLO-World 支持 **open-vocabulary 零样本检测**：不用训练，直接用文字描述找物体。\\
+
+**核心发现**：零样本效果 ≈ prompt 设计。一句话找对，一句话全漏。
+
+### 零样本 Prompt 探索
+
+在 38 张实拍球图（`my_data/`）上的零样本对比：
+
+| Prompt（零样本） | 检出 | 最高置信度 | 评价 |
+|-----------------|------|-----------|------|
+| `"toy ball"` | 30/38 (79%) | 0.980 | 泛化词，还行 |
+| `"cat ball"` | 0/38 | — | 专有名词，CLIP 不认识 |
+| **`"pink and white felt ball"`** | **35/38 (92%)** | **0.999** | 精准描述，最佳 |
+| `"一个小巧毡制纹理的毛线球..."` | 0/38 | — | 长句中文，CLIP 不吃 |
+
+**结论**：YOLO-World = CLIP 文本编码器 + YOLO 检测器，prompt 必须用 CLIP 训练分布内的**简短英文短语**。
+
+## 微调：零样本 → 完美
+
+### 公平对比（同一测试集 `cat-ball2/valid`，14张，含4张负样本，**未参与训练**）
+
+| 指标 | 零样本 `"pink and white felt ball"` | 微调后 |
+|------|-------------------------------------|--------|
+| 精确率 (Precision) | 100% (2/2) | **100% (10/10)** |
+| 召回率 (Recall) | 20% (2/10) | **100% (10/10)** |
+| 准确率 (Accuracy) | 43% | **100%** |
+| 误检 (FP) | 0 | 0 |
+| 漏检 (FN) | 8 | **0** |
+| TP 平均置信度 | 0.826 | 0.938 |
+
+### 指标定义
+
+- **精确率**：模型说"有球"时，真的有多少比例有球。100% = 从不误报
+- **召回率**：真实有球的图里，模型找到了多少。20% = 太保守，80% 不敢确认
+- **准确率**：所有判断（含负样本）的正确比例
+
+### 关键洞察
+
+零样本模型天生的"精确率极高、召回率极低"——宁可不说不犯错。微调解决了"不敢说"的问题，在维持零误检的同时把召回从 20% 拉到 100%。
+
+## 数据集
+
+整合了 cat-ball v1+v2+v3 三个版本，去重后：\\
+**324 train / 40 val / 42 test**（含 11 张负样本）
+
+```bash
+datasets/cat_ball_all/
+├── train/images/  (324张)
+├── val/images/    (40张)
+├── test/images/   (42张, 含负样本)
+└── data.yaml
+```
+
+## 训练
+
+```bash
+conda run -n yolo python -c "
+from ultralytics import YOLOWorld
+model = YOLOWorld('yolov8m-worldv2.pt')
+model.set_classes(['cat ball'])
+model.train(data='datasets/cat_ball_all/data.yaml', epochs=100, imgsz=640,
+            batch=8, lr0=0.001, optimizer='AdamW', cos_lr=True,
+            project='yoloworld_finetune', name='cat_ball_full')
+"
+```
+
+训练时间：100 epochs ≈ 10 分钟 (RTX 5060 Ti)，Val mAP50: 0.995
+
+## 推理
+
+```bash
+# 微调后模型：固定 prompt "cat ball"
+conda run -n yolo python -c "
+from ultralytics import YOLOWorld
+model = YOLOWorld('yoloworld_finetune/cat_ball_full/weights/best.pt')
+model.set_classes(['cat ball'])
+results = model.predict('image.jpg', conf=0.25, save=True)
+"
+
+# 零样本模型：可自由换 prompt
+conda run -n yolo python -c "
+from ultralytics import YOLOWorld
+model = YOLOWorld('yolov8m-worldv2.pt')
+model.set_classes(['pink and white felt ball'])
+results = model.predict('image.jpg', conf=0.1, save=True)
+"
+```
+
+## Jetson Orin 部署
+
+```bash
+# 1. 导出 ONNX FP16 (54MB)
+model.export(format='onnx', imgsz=640, half=True, simplify=True)
+
+# 2. 复制到 Jetson 后转 TensorRT
+trtexec --onnx=best.onnx --saveEngine=cat_ball.engine --fp16
+
+# 3. 推理
+# ultralytics + engine 格式，或 TensorRT Python API
+```
+
+导出文件：
+- `yoloworld_finetune/cat_ball_full/weights/best.pt` — 训练权重 (57MB)
+- `yoloworld_finetune/cat_ball_full/weights/best.onnx` — ONNX FP16 (54MB)
+- `yoloworld_finetune/cat_ball_full/weights/best.torchscript` — TorchScript (109MB)
+
+## 依赖
+
+```bash
+conda install -n yolo ultralytics  # 已安装 8.3.252
+```

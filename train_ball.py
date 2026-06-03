@@ -5,7 +5,7 @@ if __name__ == '__main__':
     # 我们使用 yolo11n.pt (Nano版) 作为预训练底座
     # 它的参数最少，训练最快，最适合在 Jetson/树莓派上部署
     print("正在加载模型...")
-    model = YOLO('yolo11s.pt') 
+    model = YOLO('weights/yolo11s.pt') 
 
     # 2. 开始训练 (Fine-tuning)
     # data: 指向数据集的配置文件 (请检查路径是否正确)

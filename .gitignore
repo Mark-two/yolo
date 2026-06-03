@@ -20,3 +20,4 @@ my_data*/
 
 # System
 .DS_Store
+yoloworld_finetune/cat_ball_full/weights/best.onnx.gz
