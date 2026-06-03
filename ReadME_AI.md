@@ -210,23 +210,59 @@ results = model.predict('image.jpg', conf=0.1, save=True)
 "
 ```
 
-## Jetson Orin 部署
+## Jetson Orin 部署（已验证）
+
+### 部署效果
+
+| 指标 | 旧模型 (YOLOv11) | 新模型 (YOLO-World) |
+|------|-------------------|---------------------|
+| 引擎文件 | `cat_ball_v11.engine` | `cat_ball_yoloworld.engine` |
+| 引擎大小 | 22MB | 57MB |
+| 推理速度 | ~15 FPS | ~15 FPS |
+| 置信度阈值 | 硬编码 0.1 (代码bug) | 0.5 (YAML可调) |
+| 检测效果 | 低 | **显著提升** ✅ |
+
+### 转换流程
 
 ```bash
-# 1. 导出 ONNX FP16 (54MB)
-model.export(format='onnx', imgsz=640, half=True, simplify=True)
+# 1. 本机导出 ONNX (opset 17, 兼容 TRT 10.3)
+conda run -n yolo python -c "
+from ultralytics import YOLOWorld
+model = YOLOWorld('yoloworld_finetune/cat_ball_full/weights/best.pt')
+model.export(format='onnx', imgsz=640, half=True, opset=17)
+"
 
-# 2. 复制到 Jetson 后转 TensorRT
-trtexec --onnx=best.onnx --saveEngine=cat_ball.engine --fp16
+# 2. SCP 传到 Jetson → 编译 TensorRT 引擎 (约 13 分钟)
+/usr/src/tensorrt/bin/trtexec --onnx=/home/kang/best.onnx \
+  --saveEngine=/home/kang/cat_ball_yoloworld.engine --fp16
 
-# 3. 推理
-# ultralytics + engine 格式，或 TensorRT Python API
+# 3. 替换旧引擎 + 更新 YAML 配置
+cp ~/cat_ball_yoloworld.engine ~/Documents/ros2_lekiwi/src/lekiwi_vision/weights/
+sed -i 's|old.engine|cat_ball_yoloworld.engine|' yolo_params.yaml
 ```
+
+### 待改进：置信度参数化
+
+原 C++ 代码 `yolo_trt_node.cpp` 中 `CONF_THRESHOLD` 硬编码为 0.1f，YAML 里的 `conf_threshold` 参数未被读取。\\
+已修改：添加 `conf_threshold_` 成员变量 + ROS2 参数声明，YAML 中的值现在生效。
+
+```cpp
+// 新增成员变量
+this->declare_parameter<float>("conf_threshold", 0.6f);
+this->get_parameter("conf_threshold", conf_threshold_);
+// 替换硬编码
+const float CONF_THRESHOLD = conf_threshold_;  // 之前是 0.1f
+```
+
+### DDS 跨机通信
+
+Jetson 默认 `rmw_fastrtps_cpp`，本地 `rmw_cyclonedds_cpp` → 互不通信。\\
+解决：Jetson 启动时设置 `export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp`。
 
 导出文件：
 - `yoloworld_finetune/cat_ball_full/weights/best.pt` — 训练权重 (57MB)
-- `yoloworld_finetune/cat_ball_full/weights/best.onnx` — ONNX FP16 (54MB)
-- `yoloworld_finetune/cat_ball_full/weights/best.torchscript` — TorchScript (109MB)
+- `yoloworld_finetune/cat_ball_full/weights/best.onnx` — ONNX FP16, opset 17 (54MB)
+- Jetson: `lekiwi_vision/weights/cat_ball_yoloworld.engine` — TensorRT (57MB)
 
 ## 依赖
 
